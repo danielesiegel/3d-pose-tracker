@@ -61,9 +61,11 @@ class PoseCapture:
         self.points_plot = None
         self.lines_plot = None
 
-        # Trail effect: store last 3 seconds of frames
-        self.trail_duration = 3.0  # seconds
-        self.trail_buffer = deque(maxlen=int(fps * self.trail_duration))
+        # Motion analysis: store recent frames for velocity/acceleration calculation
+        # For 100ms rolling average at 30 FPS: need ~3-4 frames
+        self.history_frames = 10  # Keep extra for smooth calculations
+        self.position_history = deque(maxlen=self.history_frames)
+        self.time_history = deque(maxlen=self.history_frames)
 
         # Axis bounds tracking (only expand, never shrink)
         self.axis_bounds = {
@@ -178,14 +180,72 @@ class PoseCapture:
             click.echo("Continuing without 3D visualization...")
             return False
 
-    def update_3d_plot(self, points, colors):
-        """Update 3D plot with new joint positions and trail effect."""
+    def calculate_velocity_acceleration(self, current_time):
+        """Calculate velocity and acceleration vectors using 100ms rolling average."""
+        if len(self.position_history) < 3:
+            return None, None  # Need at least 3 frames
+
+        # Get frames within last 100ms
+        time_window = 0.1  # 100ms
+        cutoff_time = current_time - time_window
+
+        # Filter to recent frames
+        recent_positions = []
+        recent_times = []
+        for i in range(len(self.position_history) - 1, -1, -1):
+            if self.time_history[i] >= cutoff_time:
+                recent_positions.insert(0, self.position_history[i])
+                recent_times.insert(0, self.time_history[i])
+            else:
+                break
+
+        if len(recent_positions) < 2:
+            return None, None
+
+        # Calculate velocities between consecutive frames
+        velocities = []
+        for i in range(1, len(recent_positions)):
+            dt = recent_times[i] - recent_times[i-1]
+            if dt > 0:
+                vel = (recent_positions[i] - recent_positions[i-1]) / dt
+                velocities.append(vel)
+
+        if len(velocities) == 0:
+            return None, None
+
+        # Average velocity over the window
+        avg_velocity = np.mean(velocities, axis=0)
+
+        # Calculate acceleration from velocity changes
+        if len(velocities) >= 2:
+            accelerations = []
+            for i in range(1, len(velocities)):
+                dt = recent_times[i+1] - recent_times[i]
+                if dt > 0:
+                    acc = (velocities[i] - velocities[i-1]) / dt
+                    accelerations.append(acc)
+
+            if len(accelerations) > 0:
+                avg_acceleration = np.mean(accelerations, axis=0)
+            else:
+                avg_acceleration = np.zeros_like(avg_velocity)
+        else:
+            avg_acceleration = np.zeros_like(avg_velocity)
+
+        return avg_velocity, avg_acceleration
+
+    def update_3d_plot(self, points, colors, current_time):
+        """Update 3D plot with joint positions and velocity/acceleration vectors."""
         if self.fig is None or not plt.fignum_exists(self.fig.number):
             return False
 
         try:
-            # Add current frame to trail buffer
-            self.trail_buffer.append({'points': points.copy(), 'colors': colors.copy()})
+            # Add current frame to history
+            self.position_history.append(points.copy())
+            self.time_history.append(current_time)
+
+            # Calculate motion vectors
+            velocity, acceleration = self.calculate_velocity_acceleration(current_time)
 
             # Clear the entire axis
             self.ax.cla()
@@ -222,54 +282,40 @@ class PoseCapture:
             self.ax.set_ylim([self.axis_bounds['y_min'], self.axis_bounds['y_max']])
             self.ax.set_zlim([self.axis_bounds['z_min'], self.axis_bounds['z_max']])
 
-            # Draw trail frames (oldest to newest, so newest is on top)
-            num_frames = len(self.trail_buffer)
-            for i, frame_data in enumerate(self.trail_buffer):
-                frame_points = frame_data['points']
-                frame_colors = frame_data['colors']
+            # Draw current joint positions
+            self.ax.scatter(xs, ys, zs, c=colors, s=200, marker='o',
+                           edgecolors='white', linewidths=2, alpha=1.0, depthshade=False)
 
-                # Calculate alpha based on position in buffer (older = more transparent)
-                # Alpha goes from ~0.1 (oldest) to 1.0 (newest)
-                alpha = (i + 1) / num_frames
-                alpha = 0.1 + (alpha * 0.9)  # Scale to 0.1-1.0 range
+            # Draw bones
+            self.ax.plot([points[0, 0], points[1, 0]],
+                        [points[0, 1], points[1, 1]],
+                        [points[0, 2], points[1, 2]],
+                        'w-', linewidth=3, alpha=1.0)
+            self.ax.plot([points[1, 0], points[2, 0]],
+                        [points[1, 1], points[2, 1]],
+                        [points[1, 2], points[2, 2]],
+                        'w-', linewidth=3, alpha=1.0)
 
-                # Extract coordinates
-                frame_xs = frame_points[:, 0]
-                frame_ys = frame_points[:, 1]
-                frame_zs = frame_points[:, 2]
+            # Draw velocity and acceleration vectors
+            if velocity is not None:
+                # Scale vectors for visibility
+                vel_scale = 0.5  # Adjust based on typical velocities
+                acc_scale = 0.1  # Adjust based on typical accelerations
 
-                # For current frame (newest), use full opacity and larger size
-                if i == num_frames - 1:
-                    # Current frame - full opacity, larger markers
-                    self.ax.scatter(frame_xs, frame_ys, frame_zs, c=frame_colors,
-                                   s=200, marker='o', edgecolors='white',
-                                   linewidths=2, alpha=1.0, depthshade=False)
+                for i in range(3):  # For each joint
+                    # Velocity vector (cyan)
+                    if np.linalg.norm(velocity[i]) > 0.01:  # Only draw if significant
+                        self.ax.quiver(points[i, 0], points[i, 1], points[i, 2],
+                                      velocity[i, 0], velocity[i, 1], velocity[i, 2],
+                                      color='cyan', alpha=0.8, linewidth=2,
+                                      arrow_length_ratio=0.3, length=vel_scale)
 
-                    # Draw bones for current frame with full opacity
-                    self.ax.plot([frame_points[0, 0], frame_points[1, 0]],
-                                [frame_points[0, 1], frame_points[1, 1]],
-                                [frame_points[0, 2], frame_points[1, 2]],
-                                'w-', linewidth=3, alpha=1.0)
-                    self.ax.plot([frame_points[1, 0], frame_points[2, 0]],
-                                [frame_points[1, 1], frame_points[2, 1]],
-                                [frame_points[1, 2], frame_points[2, 2]],
-                                'w-', linewidth=3, alpha=1.0)
-                else:
-                    # Trail frames - fading opacity, smaller markers
-                    size = 50 + (alpha * 150)  # Size from 50 to 200
-                    self.ax.scatter(frame_xs, frame_ys, frame_zs, c=frame_colors,
-                                   s=size, marker='o', alpha=alpha, depthshade=False)
-
-                    # Draw bones for trail frames with fading opacity
-                    line_width = 1 + (alpha * 2)  # Line width from 1 to 3
-                    self.ax.plot([frame_points[0, 0], frame_points[1, 0]],
-                                [frame_points[0, 1], frame_points[1, 1]],
-                                [frame_points[0, 2], frame_points[1, 2]],
-                                'w-', linewidth=line_width, alpha=alpha * 0.7)
-                    self.ax.plot([frame_points[1, 0], frame_points[2, 0]],
-                                [frame_points[1, 1], frame_points[2, 1]],
-                                [frame_points[1, 2], frame_points[2, 2]],
-                                'w-', linewidth=line_width, alpha=alpha * 0.7)
+                    # Acceleration vector (yellow)
+                    if acceleration is not None and np.linalg.norm(acceleration[i]) > 0.01:
+                        self.ax.quiver(points[i, 0], points[i, 1], points[i, 2],
+                                      acceleration[i, 0], acceleration[i, 1], acceleration[i, 2],
+                                      color='yellow', alpha=0.6, linewidth=1.5,
+                                      arrow_length_ratio=0.3, length=acc_scale)
 
             # Update the figure
             self.fig.canvas.draw_idle()
@@ -371,8 +417,8 @@ class PoseCapture:
                                     COLORS[LEFT_WRIST]['rgb']
                                 ])
 
-                                # Update 3D plot on main thread
-                                if not self.update_3d_plot(points, colors):
+                                # Update 3D plot on main thread with current time
+                                if not self.update_3d_plot(points, colors, current_time):
                                     self.enable_3d = False  # Disable if window was closed
 
                     # Draw 2D overlay
