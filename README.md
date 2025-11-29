@@ -65,17 +65,21 @@ python src/capture.py --frames 30
 **Options**:
 - `--frames`, `-f`: Frames per second to capture (default: 30)
 - `--output`, `-o`: Output directory for saved data (default: `output/`)
+- `--no-3d`: Disable 3D visualization (useful for display issues on macOS)
 
 **Controls**:
 - Press `q` to quit and save data
 
-**Example**:
+**Examples**:
 ```bash
 # Capture at 60 FPS
 python src/capture.py --frames 60
 
 # Save to custom directory
 python src/capture.py --frames 30 --output data/
+
+# Disable 3D viewer (if experiencing display issues)
+python src/capture.py --frames 30 --no-3d
 ```
 
 ### Viewer Mode
@@ -187,12 +191,23 @@ ls /dev/video*
 cap = cv2.VideoCapture(1)  # Change from 0 to 1
 ```
 
+### 3D Visualization Issues (macOS)
+
+If you see GLFW/Open3D display errors:
+```bash
+# Run without 3D visualization
+python src/capture.py --frames 30 --no-3d
+```
+
+The warning `[Open3D WARNING] GLFW Error: Cocoa: Failed to find service port for display` is a known issue on some macOS systems. The `--no-3d` flag disables the 3D viewer while keeping all capture functionality.
+
 ### Performance Issues
 
 If experiencing lag:
 - Reduce frame rate: `--frames 15`
 - Close other applications
 - Ensure good lighting for better tracking
+- Try disabling 3D view: `--no-3d`
 
 ### Import Errors
 

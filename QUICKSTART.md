@@ -39,6 +39,7 @@ python src/viewer.py output/pose_data_TIMESTAMP.parquet
 ### Capture
 - `--frames 60` - Capture at 60 FPS (default: 30)
 - `--output data/` - Save to custom directory
+- `--no-3d` - Disable 3D viewer (for display issues)
 
 ### Viewer
 - `--speed 2.0` - Play at 2x speed
@@ -60,9 +61,14 @@ python src/viewer.py output/pose_data.parquet --static
 
 ## Troubleshooting
 
+**3D display errors (macOS)?**
+```bash
+python src/capture.py --frames 30 --no-3d
+```
+
 **Webcam not found?**
 - Check camera permissions in System Preferences (macOS)
-- Try a different camera index in capture.py line 128
+- Try a different camera index in capture.py line 189
 
 **Dependencies missing?**
 ```bash
@@ -74,3 +80,4 @@ conda env update -f environment.yml
 - Reduce `--frames` value
 - Ensure good lighting
 - Close other apps
+- Try `--no-3d` flag

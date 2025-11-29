@@ -33,10 +33,11 @@ COLORS = {
 class PoseCapture:
     """Handles pose capture and visualization."""
 
-    def __init__(self, fps=30, output_dir="output"):
+    def __init__(self, fps=30, output_dir="output", enable_3d=True):
         self.fps = fps
         self.output_dir = Path(output_dir)
         self.output_dir.mkdir(exist_ok=True)
+        self.enable_3d = enable_3d
 
         # Initialize MediaPipe Pose
         self.mp_pose = mp.solutions.pose
@@ -53,8 +54,9 @@ class PoseCapture:
         self.frame_count = 0
 
         # 3D visualization setup
-        self.vis_queue = Queue(maxsize=2)
+        self.vis_queue = Queue(maxsize=2) if enable_3d else None
         self.running = True
+        self.vis_thread = None
 
     def process_frame(self, frame):
         """Process a single frame with MediaPipe."""
@@ -124,66 +126,80 @@ class PoseCapture:
 
     def visualize_3d(self):
         """Run 3D visualization in separate thread."""
-        vis = o3d.visualization.Visualizer()
-        vis.create_window(window_name="3D Pose View", width=640, height=480)
+        try:
+            vis = o3d.visualization.Visualizer()
 
-        # Create point cloud for joints
-        pcd = o3d.geometry.PointCloud()
+            # Try to create window with error handling
+            try:
+                vis.create_window(window_name="3D Pose View", width=640, height=480)
+            except Exception as e:
+                click.echo(f"Warning: Could not create 3D window: {e}")
+                click.echo("Continuing without 3D visualization...")
+                return
 
-        # Create line set for bones
-        lines = o3d.geometry.LineSet()
+            # Create point cloud for joints
+            pcd = o3d.geometry.PointCloud()
 
-        # Initialize geometry
-        vis.add_geometry(pcd)
-        vis.add_geometry(lines)
+            # Create line set for bones
+            lines = o3d.geometry.LineSet()
 
-        # Set up view
-        opt = vis.get_render_option()
-        opt.point_size = 15.0
-        opt.background_color = np.array([0.1, 0.1, 0.1])
+            # Initialize geometry
+            vis.add_geometry(pcd)
+            vis.add_geometry(lines)
 
-        # Set up camera for better initial view
-        ctr = vis.get_view_control()
+            # Set up view
+            opt = vis.get_render_option()
+            opt.point_size = 15.0
+            opt.background_color = np.array([0.1, 0.1, 0.1])
 
-        first_update = True
+            # Set up camera for better initial view
+            ctr = vis.get_view_control()
 
-        while self.running:
-            if not self.vis_queue.empty():
-                points_data = self.vis_queue.get()
+            first_update = True
 
-                if points_data is not None:
-                    points = points_data['points']
-                    colors = points_data['colors']
+            while self.running:
+                if not self.vis_queue.empty():
+                    points_data = self.vis_queue.get()
 
-                    # Update point cloud
-                    pcd.points = o3d.utility.Vector3dVector(points)
-                    pcd.colors = o3d.utility.Vector3dVector(colors)
+                    if points_data is not None:
+                        points = points_data['points']
+                        colors = points_data['colors']
 
-                    # Update lines (bones)
-                    line_points = points
-                    line_indices = [[0, 1], [1, 2]]  # shoulder->elbow, elbow->wrist
-                    lines.points = o3d.utility.Vector3dVector(line_points)
-                    lines.lines = o3d.utility.Vector2iVector(line_indices)
-                    lines.colors = o3d.utility.Vector3dVector([[1, 1, 1], [1, 1, 1]])
+                        # Update point cloud
+                        pcd.points = o3d.utility.Vector3dVector(points)
+                        pcd.colors = o3d.utility.Vector3dVector(colors)
 
-                    vis.update_geometry(pcd)
-                    vis.update_geometry(lines)
+                        # Update lines (bones)
+                        line_points = points
+                        line_indices = [[0, 1], [1, 2]]  # shoulder->elbow, elbow->wrist
+                        lines.points = o3d.utility.Vector3dVector(line_points)
+                        lines.lines = o3d.utility.Vector2iVector(line_indices)
+                        lines.colors = o3d.utility.Vector3dVector([[1, 1, 1], [1, 1, 1]])
 
-                    if first_update:
-                        vis.reset_view_point(True)
-                        first_update = False
+                        vis.update_geometry(pcd)
+                        vis.update_geometry(lines)
 
-            vis.poll_events()
-            vis.update_renderer()
-            time.sleep(0.01)
+                        if first_update:
+                            vis.reset_view_point(True)
+                            first_update = False
 
-        vis.destroy_window()
+                vis.poll_events()
+                vis.update_renderer()
+                time.sleep(0.01)
+
+            vis.destroy_window()
+        except Exception as e:
+            click.echo(f"Warning: 3D visualization error: {e}")
+            click.echo("Continuing with 2D capture only...")
 
     def run(self):
         """Main capture loop."""
-        # Start 3D visualization thread
-        vis_thread = threading.Thread(target=self.visualize_3d, daemon=True)
-        vis_thread.start()
+        # Start 3D visualization thread if enabled
+        if self.enable_3d:
+            self.vis_thread = threading.Thread(target=self.visualize_3d, daemon=True)
+            self.vis_thread.start()
+        else:
+            click.echo("3D visualization disabled")
 
         # Open webcam
         cap = cv2.VideoCapture(0)
@@ -226,27 +242,28 @@ class PoseCapture:
                     if data:
                         self.pose_data.append(data)
 
-                        # Update 3D visualization
-                        points = np.array([
-                            [data['shoulder_x'], data['shoulder_y'], data['shoulder_z']],
-                            [data['elbow_x'], data['elbow_y'], data['elbow_z']],
-                            [data['wrist_x'], data['wrist_y'], data['wrist_z']]
-                        ])
+                        # Update 3D visualization if enabled
+                        if self.enable_3d and self.vis_queue is not None:
+                            points = np.array([
+                                [data['shoulder_x'], data['shoulder_y'], data['shoulder_z']],
+                                [data['elbow_x'], data['elbow_y'], data['elbow_z']],
+                                [data['wrist_x'], data['wrist_y'], data['wrist_z']]
+                            ])
 
-                        colors = np.array([
-                            COLORS[LEFT_SHOULDER]['rgb'],
-                            COLORS[LEFT_ELBOW]['rgb'],
-                            COLORS[LEFT_WRIST]['rgb']
-                        ])
+                            colors = np.array([
+                                COLORS[LEFT_SHOULDER]['rgb'],
+                                COLORS[LEFT_ELBOW]['rgb'],
+                                COLORS[LEFT_WRIST]['rgb']
+                            ])
 
-                        # Send to visualization queue (non-blocking)
-                        if self.vis_queue.full():
-                            try:
-                                self.vis_queue.get_nowait()
-                            except:
-                                pass
+                            # Send to visualization queue (non-blocking)
+                            if self.vis_queue.full():
+                                try:
+                                    self.vis_queue.get_nowait()
+                                except:
+                                    pass
 
-                        self.vis_queue.put({'points': points, 'colors': colors})
+                            self.vis_queue.put({'points': points, 'colors': colors})
 
                 # Draw 2D overlay
                 frame = self.draw_2d_overlay(frame, results)
@@ -271,8 +288,9 @@ class PoseCapture:
         cv2.destroyAllWindows()
         self.pose.close()
 
-        # Wait for visualization thread
-        vis_thread.join(timeout=2.0)
+        # Wait for visualization thread if it was started
+        if self.vis_thread is not None:
+            self.vis_thread.join(timeout=2.0)
 
         # Save data
         self.save_data()
@@ -302,7 +320,9 @@ class PoseCapture:
               help='Frames per second to capture (default: 30)')
 @click.option('--output', '-o', default='output', type=str,
               help='Output directory for saved data (default: output)')
-def main(frames, output):
+@click.option('--no-3d', is_flag=True,
+              help='Disable 3D visualization (use if experiencing display issues)')
+def main(frames, output, no_3d):
     """
     Capture 3D pose data from webcam using MediaPipe BlazePose.
 
@@ -313,7 +333,7 @@ def main(frames, output):
         click.echo("Error: --frames must be positive", err=True)
         return
 
-    capture = PoseCapture(fps=frames, output_dir=output)
+    capture = PoseCapture(fps=frames, output_dir=output, enable_3d=not no_3d)
 
     try:
         capture.run()
