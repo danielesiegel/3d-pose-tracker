@@ -47,6 +47,7 @@ venv.bak/
 
 # Output data
 output/*.parquet
+!output/datademo.parquet  # Exception: include sample data for collaborators
 data/*.parquet
 *.parquet
 

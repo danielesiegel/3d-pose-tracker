@@ -154,6 +154,38 @@ Captured data is saved in Parquet format with the following schema:
 - Units are in meters relative to hip center
 - Z-axis points toward the camera
 
+### Sample Data for Collaborators
+
+For researchers and developers looking to analyze human motion data, we provide [`output/datademo.parquet`](output/datademo.parquet) as a sample dataset.
+
+**What it contains**: Real 3D kinematic data capturing human left arm motion over time. Each row represents a temporal snapshot (frame) of the spatial configuration of three skeletal keypoints (shoulder, elbow, wrist) as they move through 3D space.
+
+**Data represents**: The geometric trajectory and spatial evolution of left arm joint positions during natural human movement, sampled at 30 Hz. This biomechanical time-series data encodes:
+- **Position vectors** (x, y, z) for each joint in world coordinates (meters)
+- **Temporal sequence** of arm configurations during motion
+- **Kinematic state** suitable for calculating velocity, acceleration, and joint angles
+- **3D spatial relationships** between shoulder, elbow, and wrist throughout the motion
+
+**Use cases**:
+- Motion analysis and biomechanics research
+- Gesture recognition algorithm development
+- Kinematic modeling and animation
+- Motor control pattern analysis
+- Machine learning training data for pose prediction
+
+```python
+# Quick start with the sample data
+import pandas as pd
+
+# Load sample motion data
+df = pd.read_parquet('output/datademo.parquet')
+
+# Each frame contains 3D positions of left arm joints
+# Calculate joint angles, velocities, or train ML models
+print(f"Captured {len(df)} frames of motion")
+print(f"Duration: {len(df) / 30:.2f} seconds at 30 FPS")
+```
+
 ## Technical Details
 
 ### MediaPipe BlazePose
