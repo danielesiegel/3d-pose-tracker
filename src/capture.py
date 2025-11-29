@@ -290,23 +290,48 @@ class PoseCapture:
             click.echo("3D visualization disabled")
 
         # Open webcam
+        click.echo("Opening webcam...")
         cap = cv2.VideoCapture(0)
+
+        if not cap.isOpened():
+            click.echo("Failed to open camera 0, trying camera 1...", err=True)
+            cap = cv2.VideoCapture(1)
+
+        if not cap.isOpened():
+            click.echo("\nError: Could not open webcam!", err=True)
+            click.echo("Possible issues:", err=True)
+            click.echo("1. Camera in use by another application", err=True)
+            click.echo("2. Camera permissions not granted (check System Settings > Privacy)", err=True)
+            click.echo("3. No camera available", err=True)
+            return
 
         # Set camera properties for better performance
         cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
         cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
         cap.set(cv2.CAP_PROP_FPS, self.fps)
 
-        if not cap.isOpened():
-            click.echo("Error: Could not open webcam", err=True)
+        click.echo(f"Webcam opened successfully!")
+
+        # Give camera time to initialize
+        click.echo("Initializing camera...")
+        time.sleep(1.0)
+
+        # Test read
+        ret, test_frame = cap.read()
+        if not ret:
+            click.echo("\nError: Camera opened but cannot read frames!", err=True)
+            click.echo("Try closing other apps using the camera (Zoom, FaceTime, etc.)", err=True)
+            cap.release()
             return
+
+        click.echo("Camera ready!")
 
         # Calculate frame interval
         frame_interval = 1.0 / self.fps
         last_process_time = 0
 
-        click.echo(f"Starting pose capture at {self.fps} FPS")
-        click.echo("Press 'q' to quit and save data")
+        click.echo(f"\nStarting pose capture at {self.fps} FPS")
+        click.echo("Press 'q' in either window to quit and save data\n")
 
         try:
             while True:
@@ -315,8 +340,9 @@ class PoseCapture:
                 # Read frame
                 ret, frame = cap.read()
                 if not ret:
-                    click.echo("Error: Failed to read frame", err=True)
-                    break
+                    click.echo("\nWarning: Failed to read frame, retrying...", err=True)
+                    time.sleep(0.1)
+                    continue
 
                 # Process at specified FPS
                 if current_time - last_process_time >= frame_interval:
