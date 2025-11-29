@@ -28,8 +28,8 @@ Real-time 3D pose tracking and visualization using MediaPipe BlazePose. Captures
 
 1. **Clone the repository**:
    ```bash
-   git clone <your-repo-url>
-   cd manifold-learning
+   git clone https://github.com/danielesiegel/3d-pose-tracker.git
+   cd 3d-pose-tracker
    ```
 
 2. **Create conda environment**:
@@ -112,7 +112,7 @@ python src/viewer.py output/pose_data.parquet --static
 ## Project Structure
 
 ```
-manifold-learning/
+3d-pose-tracker/
 ├── src/
 │   ├── capture.py          # Main capture script
 │   └── viewer.py           # Playback viewer
