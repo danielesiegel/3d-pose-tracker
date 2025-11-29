@@ -12,8 +12,6 @@ import click
 import time
 from datetime import datetime
 from pathlib import Path
-import threading
-from queue import Queue
 import matplotlib.pyplot as plt
 from mpl_toolkits.mplot3d import Axes3D
 import matplotlib
@@ -56,10 +54,11 @@ class PoseCapture:
         self.pose_data = []
         self.frame_count = 0
 
-        # 3D visualization setup
-        self.vis_queue = Queue(maxsize=2) if enable_3d else None
-        self.running = True
-        self.vis_thread = None
+        # 3D visualization setup (will be initialized on main thread)
+        self.fig = None
+        self.ax = None
+        self.points_plot = None
+        self.lines_plot = None
 
     def process_frame(self, frame):
         """Process a single frame with MediaPipe."""
@@ -127,103 +126,90 @@ class PoseCapture:
 
         return frame
 
-    def visualize_3d(self):
-        """Run 3D visualization using matplotlib (macOS compatible)."""
+    def init_3d_plot(self):
+        """Initialize 3D matplotlib plot (must be called on main thread)."""
         try:
-            # Set up matplotlib figure
             plt.ion()  # Interactive mode
-            fig = plt.figure(figsize=(8, 6))
-            ax = fig.add_subplot(111, projection='3d')
+            self.fig = plt.figure(figsize=(8, 6))
+            self.ax = self.fig.add_subplot(111, projection='3d')
 
             # Set labels and title
-            ax.set_xlabel('X')
-            ax.set_ylabel('Y')
-            ax.set_zlabel('Z')
-            ax.set_title('3D Pose View - Left Arm')
+            self.ax.set_xlabel('X')
+            self.ax.set_ylabel('Y')
+            self.ax.set_zlabel('Z')
+            self.ax.set_title('3D Pose View - Left Arm')
 
             # Set background color
-            ax.set_facecolor('#1a1a1a')
-            fig.patch.set_facecolor('#2a2a2a')
-
-            # Initialize empty plot elements
-            points_plot = None
-            lines_plot = None
+            self.ax.set_facecolor('#1a1a1a')
+            self.fig.patch.set_facecolor('#2a2a2a')
 
             # Set initial view limits
-            ax.set_xlim([-0.5, 0.5])
-            ax.set_ylim([-0.5, 0.5])
-            ax.set_zlim([-0.5, 0.5])
+            self.ax.set_xlim([-0.5, 0.5])
+            self.ax.set_ylim([-0.5, 0.5])
+            self.ax.set_zlim([-0.5, 0.5])
 
             click.echo("3D visualization window opened (matplotlib)")
-
-            while self.running:
-                try:
-                    if not self.vis_queue.empty():
-                        points_data = self.vis_queue.get()
-
-                        if points_data is not None:
-                            points = points_data['points']
-                            colors = points_data['colors']
-
-                            # Clear previous plots
-                            if points_plot is not None:
-                                points_plot.remove()
-                            if lines_plot is not None:
-                                for line in lines_plot:
-                                    line.remove()
-
-                            # Plot joints as scatter points
-                            xs, ys, zs = points[:, 0], points[:, 1], points[:, 2]
-                            points_plot = ax.scatter(xs, ys, zs, c=colors, s=200, marker='o',
-                                                    edgecolors='white', linewidths=2)
-
-                            # Plot bones as lines
-                            lines_plot = []
-                            # Shoulder to elbow
-                            line = ax.plot([points[0, 0], points[1, 0]],
-                                          [points[0, 1], points[1, 1]],
-                                          [points[0, 2], points[1, 2]],
-                                          'w-', linewidth=3)[0]
-                            lines_plot.append(line)
-
-                            # Elbow to wrist
-                            line = ax.plot([points[1, 0], points[2, 0]],
-                                          [points[1, 1], points[2, 1]],
-                                          [points[1, 2], points[2, 2]],
-                                          'w-', linewidth=3)[0]
-                            lines_plot.append(line)
-
-                            # Auto-adjust view limits to keep points in view
-                            margin = 0.2
-                            ax.set_xlim([xs.min() - margin, xs.max() + margin])
-                            ax.set_ylim([ys.min() - margin, ys.max() + margin])
-                            ax.set_zlim([zs.min() - margin, zs.max() + margin])
-
-                            # Redraw
-                            plt.pause(0.001)
-                    else:
-                        plt.pause(0.01)
-
-                    # Check if window was closed
-                    if not plt.fignum_exists(fig.number):
-                        break
-
-                except Exception as e:
-                    click.echo(f"Warning: Error updating 3D plot: {e}")
-                    break
-
-            plt.close(fig)
-
+            return True
         except Exception as e:
-            click.echo(f"Warning: 3D visualization error: {e}")
-            click.echo("Continuing with 2D capture only...")
+            click.echo(f"Warning: Could not create 3D window: {e}")
+            click.echo("Continuing without 3D visualization...")
+            return False
+
+    def update_3d_plot(self, points, colors):
+        """Update 3D plot with new joint positions."""
+        if self.fig is None or not plt.fignum_exists(self.fig.number):
+            return False
+
+        try:
+            # Clear previous plots
+            if self.points_plot is not None:
+                self.points_plot.remove()
+            if self.lines_plot is not None:
+                for line in self.lines_plot:
+                    line.remove()
+
+            # Plot joints as scatter points
+            xs, ys, zs = points[:, 0], points[:, 1], points[:, 2]
+            self.points_plot = self.ax.scatter(xs, ys, zs, c=colors, s=200, marker='o',
+                                              edgecolors='white', linewidths=2)
+
+            # Plot bones as lines
+            self.lines_plot = []
+            # Shoulder to elbow
+            line = self.ax.plot([points[0, 0], points[1, 0]],
+                               [points[0, 1], points[1, 1]],
+                               [points[0, 2], points[1, 2]],
+                               'w-', linewidth=3)[0]
+            self.lines_plot.append(line)
+
+            # Elbow to wrist
+            line = self.ax.plot([points[1, 0], points[2, 0]],
+                               [points[1, 1], points[2, 1]],
+                               [points[1, 2], points[2, 2]],
+                               'w-', linewidth=3)[0]
+            self.lines_plot.append(line)
+
+            # Auto-adjust view limits to keep points in view
+            margin = 0.2
+            self.ax.set_xlim([xs.min() - margin, xs.max() + margin])
+            self.ax.set_ylim([ys.min() - margin, ys.max() + margin])
+            self.ax.set_zlim([zs.min() - margin, zs.max() + margin])
+
+            # Update the figure
+            self.fig.canvas.draw_idle()
+            self.fig.canvas.flush_events()
+
+            return True
+        except Exception as e:
+            click.echo(f"Warning: Error updating 3D plot: {e}")
+            return False
 
     def run(self):
-        """Main capture loop."""
-        # Start 3D visualization thread if enabled
+        """Main capture loop (runs on main thread for macOS compatibility)."""
+        # Initialize 3D visualization on main thread if enabled
         if self.enable_3d:
-            self.vis_thread = threading.Thread(target=self.visualize_3d, daemon=True)
-            self.vis_thread.start()
+            if not self.init_3d_plot():
+                self.enable_3d = False
         else:
             click.echo("3D visualization disabled")
 
@@ -246,80 +232,82 @@ class PoseCapture:
         click.echo(f"Starting pose capture at {self.fps} FPS")
         click.echo("Press 'q' to quit and save data")
 
-        while True:
-            current_time = time.time()
+        try:
+            while True:
+                current_time = time.time()
 
-            # Read frame
-            ret, frame = cap.read()
-            if not ret:
-                click.echo("Error: Failed to read frame", err=True)
-                break
+                # Read frame
+                ret, frame = cap.read()
+                if not ret:
+                    click.echo("Error: Failed to read frame", err=True)
+                    break
 
-            # Process at specified FPS
-            if current_time - last_process_time >= frame_interval:
-                # Process pose
-                results = self.process_frame(frame)
+                # Process at specified FPS
+                if current_time - last_process_time >= frame_interval:
+                    # Process pose
+                    results = self.process_frame(frame)
 
-                # Extract and store data
-                if results.pose_world_landmarks:
-                    timestamp = datetime.now().isoformat()
-                    data = self.extract_left_arm_data(results, timestamp)
+                    # Extract and store data
+                    if results.pose_world_landmarks:
+                        timestamp = datetime.now().isoformat()
+                        data = self.extract_left_arm_data(results, timestamp)
 
-                    if data:
-                        self.pose_data.append(data)
+                        if data:
+                            self.pose_data.append(data)
 
-                        # Update 3D visualization if enabled
-                        if self.enable_3d and self.vis_queue is not None:
-                            points = np.array([
-                                [data['shoulder_x'], data['shoulder_y'], data['shoulder_z']],
-                                [data['elbow_x'], data['elbow_y'], data['elbow_z']],
-                                [data['wrist_x'], data['wrist_y'], data['wrist_z']]
-                            ])
+                            # Update 3D visualization if enabled
+                            if self.enable_3d:
+                                points = np.array([
+                                    [data['shoulder_x'], data['shoulder_y'], data['shoulder_z']],
+                                    [data['elbow_x'], data['elbow_y'], data['elbow_z']],
+                                    [data['wrist_x'], data['wrist_y'], data['wrist_z']]
+                                ])
 
-                            colors = np.array([
-                                COLORS[LEFT_SHOULDER]['rgb'],
-                                COLORS[LEFT_ELBOW]['rgb'],
-                                COLORS[LEFT_WRIST]['rgb']
-                            ])
+                                colors = np.array([
+                                    COLORS[LEFT_SHOULDER]['rgb'],
+                                    COLORS[LEFT_ELBOW]['rgb'],
+                                    COLORS[LEFT_WRIST]['rgb']
+                                ])
 
-                            # Send to visualization queue (non-blocking)
-                            if self.vis_queue.full():
-                                try:
-                                    self.vis_queue.get_nowait()
-                                except:
-                                    pass
+                                # Update 3D plot on main thread
+                                if not self.update_3d_plot(points, colors):
+                                    self.enable_3d = False  # Disable if window was closed
 
-                            self.vis_queue.put({'points': points, 'colors': colors})
+                    # Draw 2D overlay
+                    frame = self.draw_2d_overlay(frame, results)
 
-                # Draw 2D overlay
-                frame = self.draw_2d_overlay(frame, results)
+                    # Add FPS and frame count
+                    cv2.putText(frame, f"FPS: {self.fps} | Frames: {self.frame_count}",
+                               (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2)
 
-                # Add FPS and frame count
-                cv2.putText(frame, f"FPS: {self.fps} | Frames: {self.frame_count}",
-                           (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2)
+                    self.frame_count += 1
+                    last_process_time = current_time
 
-                self.frame_count += 1
-                last_process_time = current_time
+                # Display frame
+                cv2.imshow('Pose Capture', frame)
 
-            # Display frame
-            cv2.imshow('Pose Capture', frame)
+                # Check for quit
+                if cv2.waitKey(1) & 0xFF == ord('q'):
+                    break
 
-            # Check for quit
-            if cv2.waitKey(1) & 0xFF == ord('q'):
-                break
+                # Check if 3D window was closed
+                if self.enable_3d and self.fig is not None:
+                    if not plt.fignum_exists(self.fig.number):
+                        click.echo("3D window closed, continuing with 2D only")
+                        self.enable_3d = False
 
-        # Cleanup
-        self.running = False
-        cap.release()
-        cv2.destroyAllWindows()
-        self.pose.close()
+        finally:
+            # Cleanup
+            cap.release()
+            cv2.destroyAllWindows()
+            self.pose.close()
 
-        # Wait for visualization thread if it was started
-        if self.vis_thread is not None:
-            self.vis_thread.join(timeout=2.0)
+            # Close matplotlib if open
+            if self.fig is not None:
+                plt.close(self.fig)
 
-        # Save data
-        self.save_data()
+            # Save data
+            self.save_data()
 
     def save_data(self):
         """Save captured data to Parquet file."""
