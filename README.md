@@ -7,7 +7,8 @@ Real-time 3D pose tracking and visualization using MediaPipe BlazePose. Captures
 - **Real-time 3D Pose Tracking**: Uses MediaPipe BlazePose for accurate 3D pose estimation
 - **Dual Visualization**:
   - 2D video feed with pose overlay (OpenCV)
-  - Real-time 3D spatial viewer (Open3D)
+  - Real-time 3D spatial viewer (Matplotlib - macOS stable)
+- **macOS Optimized**: Uses matplotlib for 3D visualization - no display issues
 - **Optimized Performance**: Configurable frame rate, efficient processing pipeline
 - **Data Persistence**: Saves joint positions to Parquet format with Snappy compression
 - **Interactive Playback**: Replay and analyze captured motion with playback controls
@@ -48,8 +49,9 @@ Real-time 3D pose tracking and visualization using MediaPipe BlazePose. Captures
 - **Key Dependencies**:
   - MediaPipe 0.10.9 (BlazePose model)
   - OpenCV 4.8.1 (video capture)
-  - Open3D 0.18.0 (3D visualization)
-  - Pandas 2.0.3 + PyArrow 12.0.1 (Parquet I/O)
+  - Matplotlib 3.7+ (3D visualization for capture - macOS stable)
+  - Open3D 0.18.0+ (3D visualization for viewer)
+  - Pandas 2.0+ + PyArrow 12.0+ (Parquet I/O)
   - Click 8.1.7 (CLI framework)
 
 ## Usage
@@ -173,10 +175,13 @@ Captured data is saved in Parquet format with the following schema:
 ### Visualization
 
 - **2D View**: OpenCV window (640x480)
-- **3D View**: Open3D real-time renderer
-  - Point size: 15.0
-  - Line width: 5.0
-  - Auto-rotating view support
+- **3D View (Capture)**: Matplotlib 3D renderer (macOS stable)
+  - Interactive rotation with mouse
+  - Auto-scaling view limits
+  - Color-coded joints and bones
+- **3D View (Viewer)**: Open3D renderer for playback
+  - High-performance trajectory visualization
+  - Playback controls
 
 ## Troubleshooting
 
@@ -191,15 +196,15 @@ ls /dev/video*
 cap = cv2.VideoCapture(1)  # Change from 0 to 1
 ```
 
-### 3D Visualization Issues (macOS)
+### 3D Visualization Issues
 
-If you see GLFW/Open3D display errors:
+If experiencing any 3D display issues:
 ```bash
 # Run without 3D visualization
 python src/capture.py --frames 30 --no-3d
 ```
 
-The warning `[Open3D WARNING] GLFW Error: Cocoa: Failed to find service port for display` is a known issue on some macOS systems. The `--no-3d` flag disables the 3D viewer while keeping all capture functionality.
+The capture script now uses matplotlib which is stable on macOS. The `--no-3d` flag is available if you want to disable the 3D viewer entirely.
 
 ### Performance Issues
 

@@ -10,11 +10,14 @@ import numpy as np
 import pandas as pd
 import click
 import time
-import open3d as o3d
 from datetime import datetime
 from pathlib import Path
 import threading
 from queue import Queue
+import matplotlib.pyplot as plt
+from mpl_toolkits.mplot3d import Axes3D
+import matplotlib
+matplotlib.use('TkAgg')  # Use TkAgg backend for better macOS compatibility
 
 
 # MediaPipe BlazePose landmark indices for left arm
@@ -125,69 +128,92 @@ class PoseCapture:
         return frame
 
     def visualize_3d(self):
-        """Run 3D visualization in separate thread."""
+        """Run 3D visualization using matplotlib (macOS compatible)."""
         try:
-            vis = o3d.visualization.Visualizer()
+            # Set up matplotlib figure
+            plt.ion()  # Interactive mode
+            fig = plt.figure(figsize=(8, 6))
+            ax = fig.add_subplot(111, projection='3d')
 
-            # Try to create window with error handling
-            try:
-                vis.create_window(window_name="3D Pose View", width=640, height=480)
-            except Exception as e:
-                click.echo(f"Warning: Could not create 3D window: {e}")
-                click.echo("Continuing without 3D visualization...")
-                return
+            # Set labels and title
+            ax.set_xlabel('X')
+            ax.set_ylabel('Y')
+            ax.set_zlabel('Z')
+            ax.set_title('3D Pose View - Left Arm')
 
-            # Create point cloud for joints
-            pcd = o3d.geometry.PointCloud()
+            # Set background color
+            ax.set_facecolor('#1a1a1a')
+            fig.patch.set_facecolor('#2a2a2a')
 
-            # Create line set for bones
-            lines = o3d.geometry.LineSet()
+            # Initialize empty plot elements
+            points_plot = None
+            lines_plot = None
 
-            # Initialize geometry
-            vis.add_geometry(pcd)
-            vis.add_geometry(lines)
+            # Set initial view limits
+            ax.set_xlim([-0.5, 0.5])
+            ax.set_ylim([-0.5, 0.5])
+            ax.set_zlim([-0.5, 0.5])
 
-            # Set up view
-            opt = vis.get_render_option()
-            opt.point_size = 15.0
-            opt.background_color = np.array([0.1, 0.1, 0.1])
-
-            # Set up camera for better initial view
-            ctr = vis.get_view_control()
-
-            first_update = True
+            click.echo("3D visualization window opened (matplotlib)")
 
             while self.running:
-                if not self.vis_queue.empty():
-                    points_data = self.vis_queue.get()
+                try:
+                    if not self.vis_queue.empty():
+                        points_data = self.vis_queue.get()
 
-                    if points_data is not None:
-                        points = points_data['points']
-                        colors = points_data['colors']
+                        if points_data is not None:
+                            points = points_data['points']
+                            colors = points_data['colors']
 
-                        # Update point cloud
-                        pcd.points = o3d.utility.Vector3dVector(points)
-                        pcd.colors = o3d.utility.Vector3dVector(colors)
+                            # Clear previous plots
+                            if points_plot is not None:
+                                points_plot.remove()
+                            if lines_plot is not None:
+                                for line in lines_plot:
+                                    line.remove()
 
-                        # Update lines (bones)
-                        line_points = points
-                        line_indices = [[0, 1], [1, 2]]  # shoulder->elbow, elbow->wrist
-                        lines.points = o3d.utility.Vector3dVector(line_points)
-                        lines.lines = o3d.utility.Vector2iVector(line_indices)
-                        lines.colors = o3d.utility.Vector3dVector([[1, 1, 1], [1, 1, 1]])
+                            # Plot joints as scatter points
+                            xs, ys, zs = points[:, 0], points[:, 1], points[:, 2]
+                            points_plot = ax.scatter(xs, ys, zs, c=colors, s=200, marker='o',
+                                                    edgecolors='white', linewidths=2)
 
-                        vis.update_geometry(pcd)
-                        vis.update_geometry(lines)
+                            # Plot bones as lines
+                            lines_plot = []
+                            # Shoulder to elbow
+                            line = ax.plot([points[0, 0], points[1, 0]],
+                                          [points[0, 1], points[1, 1]],
+                                          [points[0, 2], points[1, 2]],
+                                          'w-', linewidth=3)[0]
+                            lines_plot.append(line)
 
-                        if first_update:
-                            vis.reset_view_point(True)
-                            first_update = False
+                            # Elbow to wrist
+                            line = ax.plot([points[1, 0], points[2, 0]],
+                                          [points[1, 1], points[2, 1]],
+                                          [points[1, 2], points[2, 2]],
+                                          'w-', linewidth=3)[0]
+                            lines_plot.append(line)
 
-                vis.poll_events()
-                vis.update_renderer()
-                time.sleep(0.01)
+                            # Auto-adjust view limits to keep points in view
+                            margin = 0.2
+                            ax.set_xlim([xs.min() - margin, xs.max() + margin])
+                            ax.set_ylim([ys.min() - margin, ys.max() + margin])
+                            ax.set_zlim([zs.min() - margin, zs.max() + margin])
 
-            vis.destroy_window()
+                            # Redraw
+                            plt.pause(0.001)
+                    else:
+                        plt.pause(0.01)
+
+                    # Check if window was closed
+                    if not plt.fignum_exists(fig.number):
+                        break
+
+                except Exception as e:
+                    click.echo(f"Warning: Error updating 3D plot: {e}")
+                    break
+
+            plt.close(fig)
+
         except Exception as e:
             click.echo(f"Warning: 3D visualization error: {e}")
             click.echo("Continuing with 2D capture only...")
