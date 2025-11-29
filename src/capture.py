@@ -12,6 +12,7 @@ import click
 import time
 from datetime import datetime
 from pathlib import Path
+from collections import deque
 import matplotlib.pyplot as plt
 from mpl_toolkits.mplot3d import Axes3D
 import matplotlib
@@ -59,6 +60,20 @@ class PoseCapture:
         self.ax = None
         self.points_plot = None
         self.lines_plot = None
+
+        # Trail effect: store last 3 seconds of frames
+        self.trail_duration = 3.0  # seconds
+        self.trail_buffer = deque(maxlen=int(fps * self.trail_duration))
+
+        # Axis bounds tracking (only expand, never shrink)
+        self.axis_bounds = {
+            'x_min': -0.5, 'x_max': 0.5,
+            'y_min': -0.5, 'y_max': 0.5,
+            'z_min': -0.5, 'z_max': 0.5
+        }
+
+        # Quit flag for keyboard handling
+        self.should_quit = False
 
     def process_frame(self, frame):
         """Process a single frame with MediaPipe."""
@@ -137,18 +152,26 @@ class PoseCapture:
             self.ax.set_xlabel('X')
             self.ax.set_ylabel('Y')
             self.ax.set_zlabel('Z')
-            self.ax.set_title('3D Pose View - Left Arm')
+            self.ax.set_title('3D Pose View - Left Arm (Press Q to quit)')
 
             # Set background color
             self.ax.set_facecolor('#1a1a1a')
             self.fig.patch.set_facecolor('#2a2a2a')
 
             # Set initial view limits
-            self.ax.set_xlim([-0.5, 0.5])
-            self.ax.set_ylim([-0.5, 0.5])
-            self.ax.set_zlim([-0.5, 0.5])
+            self.ax.set_xlim([self.axis_bounds['x_min'], self.axis_bounds['x_max']])
+            self.ax.set_ylim([self.axis_bounds['y_min'], self.axis_bounds['y_max']])
+            self.ax.set_zlim([self.axis_bounds['z_min'], self.axis_bounds['z_max']])
+
+            # Add keyboard event handler
+            def on_key(event):
+                if event.key == 'q':
+                    self.should_quit = True
+
+            self.fig.canvas.mpl_connect('key_press_event', on_key)
 
             click.echo("3D visualization window opened (matplotlib)")
+            click.echo("Press 'q' in either window to quit and save")
             return True
         except Exception as e:
             click.echo(f"Warning: Could not create 3D window: {e}")
@@ -156,44 +179,97 @@ class PoseCapture:
             return False
 
     def update_3d_plot(self, points, colors):
-        """Update 3D plot with new joint positions."""
+        """Update 3D plot with new joint positions and trail effect."""
         if self.fig is None or not plt.fignum_exists(self.fig.number):
             return False
 
         try:
-            # Clear previous plots
-            if self.points_plot is not None:
-                self.points_plot.remove()
-            if self.lines_plot is not None:
-                for line in self.lines_plot:
-                    line.remove()
+            # Add current frame to trail buffer
+            self.trail_buffer.append({'points': points.copy(), 'colors': colors.copy()})
 
-            # Plot joints as scatter points
-            xs, ys, zs = points[:, 0], points[:, 1], points[:, 2]
-            self.points_plot = self.ax.scatter(xs, ys, zs, c=colors, s=200, marker='o',
-                                              edgecolors='white', linewidths=2)
+            # Clear the entire axis
+            self.ax.cla()
 
-            # Plot bones as lines
-            self.lines_plot = []
-            # Shoulder to elbow
-            line = self.ax.plot([points[0, 0], points[1, 0]],
-                               [points[0, 1], points[1, 1]],
-                               [points[0, 2], points[1, 2]],
-                               'w-', linewidth=3)[0]
-            self.lines_plot.append(line)
+            # Reset labels and colors after clearing
+            self.ax.set_xlabel('X')
+            self.ax.set_ylabel('Y')
+            self.ax.set_zlabel('Z')
+            self.ax.set_title('3D Pose View - Left Arm (Press Q to quit)')
+            self.ax.set_facecolor('#1a1a1a')
 
-            # Elbow to wrist
-            line = self.ax.plot([points[1, 0], points[2, 0]],
-                               [points[1, 1], points[2, 1]],
-                               [points[1, 2], points[2, 2]],
-                               'w-', linewidth=3)[0]
-            self.lines_plot.append(line)
-
-            # Auto-adjust view limits to keep points in view
+            # Update axis bounds (only expand, never shrink)
             margin = 0.2
-            self.ax.set_xlim([xs.min() - margin, xs.max() + margin])
-            self.ax.set_ylim([ys.min() - margin, ys.max() + margin])
-            self.ax.set_zlim([zs.min() - margin, zs.max() + margin])
+            xs, ys, zs = points[:, 0], points[:, 1], points[:, 2]
+
+            # Check if we need to expand bounds
+            if xs.min() - margin < self.axis_bounds['x_min']:
+                self.axis_bounds['x_min'] = xs.min() - margin
+            if xs.max() + margin > self.axis_bounds['x_max']:
+                self.axis_bounds['x_max'] = xs.max() + margin
+
+            if ys.min() - margin < self.axis_bounds['y_min']:
+                self.axis_bounds['y_min'] = ys.min() - margin
+            if ys.max() + margin > self.axis_bounds['y_max']:
+                self.axis_bounds['y_max'] = ys.max() + margin
+
+            if zs.min() - margin < self.axis_bounds['z_min']:
+                self.axis_bounds['z_min'] = zs.min() - margin
+            if zs.max() + margin > self.axis_bounds['z_max']:
+                self.axis_bounds['z_max'] = zs.max() + margin
+
+            # Set axis limits (stable, only expanding)
+            self.ax.set_xlim([self.axis_bounds['x_min'], self.axis_bounds['x_max']])
+            self.ax.set_ylim([self.axis_bounds['y_min'], self.axis_bounds['y_max']])
+            self.ax.set_zlim([self.axis_bounds['z_min'], self.axis_bounds['z_max']])
+
+            # Draw trail frames (oldest to newest, so newest is on top)
+            num_frames = len(self.trail_buffer)
+            for i, frame_data in enumerate(self.trail_buffer):
+                frame_points = frame_data['points']
+                frame_colors = frame_data['colors']
+
+                # Calculate alpha based on position in buffer (older = more transparent)
+                # Alpha goes from ~0.1 (oldest) to 1.0 (newest)
+                alpha = (i + 1) / num_frames
+                alpha = 0.1 + (alpha * 0.9)  # Scale to 0.1-1.0 range
+
+                # Extract coordinates
+                frame_xs = frame_points[:, 0]
+                frame_ys = frame_points[:, 1]
+                frame_zs = frame_points[:, 2]
+
+                # For current frame (newest), use full opacity and larger size
+                if i == num_frames - 1:
+                    # Current frame - full opacity, larger markers
+                    self.ax.scatter(frame_xs, frame_ys, frame_zs, c=frame_colors,
+                                   s=200, marker='o', edgecolors='white',
+                                   linewidths=2, alpha=1.0, depthshade=False)
+
+                    # Draw bones for current frame with full opacity
+                    self.ax.plot([frame_points[0, 0], frame_points[1, 0]],
+                                [frame_points[0, 1], frame_points[1, 1]],
+                                [frame_points[0, 2], frame_points[1, 2]],
+                                'w-', linewidth=3, alpha=1.0)
+                    self.ax.plot([frame_points[1, 0], frame_points[2, 0]],
+                                [frame_points[1, 1], frame_points[2, 1]],
+                                [frame_points[1, 2], frame_points[2, 2]],
+                                'w-', linewidth=3, alpha=1.0)
+                else:
+                    # Trail frames - fading opacity, smaller markers
+                    size = 50 + (alpha * 150)  # Size from 50 to 200
+                    self.ax.scatter(frame_xs, frame_ys, frame_zs, c=frame_colors,
+                                   s=size, marker='o', alpha=alpha, depthshade=False)
+
+                    # Draw bones for trail frames with fading opacity
+                    line_width = 1 + (alpha * 2)  # Line width from 1 to 3
+                    self.ax.plot([frame_points[0, 0], frame_points[1, 0]],
+                                [frame_points[0, 1], frame_points[1, 1]],
+                                [frame_points[0, 2], frame_points[1, 2]],
+                                'w-', linewidth=line_width, alpha=alpha * 0.7)
+                    self.ax.plot([frame_points[1, 0], frame_points[2, 0]],
+                                [frame_points[1, 1], frame_points[2, 1]],
+                                [frame_points[1, 2], frame_points[2, 2]],
+                                'w-', linewidth=line_width, alpha=alpha * 0.7)
 
             # Update the figure
             self.fig.canvas.draw_idle()
@@ -286,8 +362,10 @@ class PoseCapture:
                 # Display frame
                 cv2.imshow('Pose Capture', frame)
 
-                # Check for quit
-                if cv2.waitKey(1) & 0xFF == ord('q'):
+                # Check for quit from either window
+                key = cv2.waitKey(1) & 0xFF
+                if key == ord('q') or self.should_quit:
+                    click.echo("\nQuitting and saving...")
                     break
 
                 # Check if 3D window was closed
